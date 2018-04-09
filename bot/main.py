@@ -174,12 +174,9 @@ class DeepNeuralQTable:
 
         self.inputs = tf.placeholder(shape=[None,self.radius*2+1,self.radius*2+1,self.channels], dtype=tf.float32)
 
-        mFilter = 1
-        if radius >= 3:
-            mFilter *= 2
-        filters = [self.channels*mFilter*16, self.channels*mFilter*16, self.channels*mFilter*24]
-        kernelSizes = [3, 3, 3]
-        kernelStrides = [1, 1, 2]
+        filters = np.array([16, 32, 40, 44, 48]) * self.channels
+        kernelSizes = [2, 2, 2, 2, 2]
+        kernelStrides = [1, 1, 1, 1, 1]
 
         # CNN layers
         weightList = []
@@ -194,9 +191,17 @@ class DeepNeuralQTable:
                                         padding='valid', activation=tf.nn.leaky_relu)
             weightList.append(tf.get_default_graph().get_tensor_by_name(convLayer.name.partition('/')[0] + '/kernel:0'))
             #convLayer = tf.layers.batch_normalization(convLayer)
-        if radius >= 3:
             convLayer = tf.layers.conv2d(convLayer, filters=filters[2], 
                                         kernel_size=kernelSizes[2], strides=kernelStrides[2], 
+                                        padding='valid', activation=tf.nn.leaky_relu)
+            weightList.append(tf.get_default_graph().get_tensor_by_name(convLayer.name.partition('/')[0] + '/kernel:0'))
+        if radius >= 3:
+            convLayer = tf.layers.conv2d(convLayer, filters=filters[3], 
+                                        kernel_size=kernelSizes[3], strides=kernelStrides[3], 
+                                        padding='valid', activation=tf.nn.leaky_relu)
+            weightList.append(tf.get_default_graph().get_tensor_by_name(convLayer.name.partition('/')[0] + '/kernel:0'))
+            convLayer = tf.layers.conv2d(convLayer, filters=filters[4], 
+                                        kernel_size=kernelSizes[4], strides=kernelStrides[4], 
                                         padding='valid', activation=tf.nn.leaky_relu)
             weightList.append(tf.get_default_graph().get_tensor_by_name(convLayer.name.partition('/')[0] + '/kernel:0'))
             #convLayer = tf.layers.batch_normalization(convLayer)
@@ -546,8 +551,8 @@ def main() -> int:
 
     DeepQNetwork = QLearning[DeepNeuralQTable, DeepNeuralQTable.State]
     qTable = DeepNeuralQTable(careBonus=True, carePlayers=False, careShoots=False, radius=3, 
-                                                    learningRate=2e-4, isTraining=cmdArgs.mode=='learn')
-    qLearning = DeepQNetwork(qTable, learningRate=1.0, discountFactor=0.7, explorationTemperature=explorationTemperature)
+                                                    learningRate=3e-4, isTraining=cmdArgs.mode=='learn')
+    qLearning = DeepQNetwork(qTable, learningRate=1.0, discountFactor=0.6, explorationTemperature=explorationTemperature)
     agent = (qTable, qLearning)
 
     if cmdArgs.mode in ['play', 'record']:
@@ -558,24 +563,6 @@ def main() -> int:
 
     return 0
 
-# def convert():
-#     traceDir = '/tmp/masterbot/traces'
-#     i = 1
-#     for traceName in os.listdir(traceDir):
-#         tracePath = os.path.join(traceDir, traceName)
-#         with open(tracePath, 'rb') as traceFile:
-#             data = pickle.load(traceFile)
-#         assert type(data) == list
-#         data = [
-#                    (DeepNeuralQTable.State(state), actionId, DeepNeuralQTable.State(newState), reward)
-#                    for state, actionId, newState, reward in data
-#        ]
-#         with open(tracePath, 'wb+') as traceFile:
-#             pickle.dump(data, traceFile)
-#         print(f'{i/len(os.listdir(traceDir))}')
-#         i += 1
-
 if __name__ == '__main__':
-    #convert()
     exit(main())
 
