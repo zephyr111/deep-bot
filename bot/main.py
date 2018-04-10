@@ -24,9 +24,9 @@ from GameSession import GameSession
 # - Fix the issue with target network (batchs help to simulate a target network)
 # - Use batch normalization if deeper networks are used
 # References:
-# - https://medium.com/@awjuliani/simple-reinforcement-learning-with-tensorflow-part-4-deep-q-networks-and-beyond-8438a3e2b8df
-# - https://medium.com/emergent-future/simple-reinforcement-learning-with-tensorflow-part-7-action-selection-strategies-for-exploration-d3a97b7cceaf
-
+# - DQN: https://medium.com/@awjuliani/simple-reinforcement-learning-with-tensorflow-part-4-deep-q-networks-and-beyond-8438a3e2b8df
+# - Exploration: https://medium.com/emergent-future/simple-reinforcement-learning-with-tensorflow-part-7-action-selection-strategies-for-exploration-d3a97b7cceaf
+# - Batch normalization: https://github.com/martin-gorner/tensorflow-mnist-tutorial/blob/master/README_BATCHNORM.md
 
 
 def geomScaling(inputSize:int, outputSize:int, internalStepCount:int):
@@ -161,6 +161,8 @@ class DeepNeuralQTable:
         self.careBonus = careBonus
         self.carePlayers = carePlayers
         self.careShoots = careShoots
+        self.isTraining = isTraining
+        self.normLayers = []
 
         self.outputSize = len(DeepNeuralQTable.actions)
 
@@ -178,59 +180,69 @@ class DeepNeuralQTable:
         kernelSizes = [2, 2, 2, 2, 2]
         kernelStrides = [1, 1, 1, 1, 1]
 
+        # Note: batch normization and dropout cause both stabilization issues during training
+
         # CNN layers
-        weightList = []
-        convLayer = tf.layers.conv2d(self.inputs, filters=filters[0], 
-                                        kernel_size=kernelSizes[0], strides=kernelStrides[0], 
-                                        padding='valid', activation=tf.nn.leaky_relu)
-        weightList.append(tf.get_default_graph().get_tensor_by_name(convLayer.name.partition('/')[0] + '/kernel:0'))
-        #convLayer = tf.layers.batch_normalization(convLayer)
+        self.weightList = []
+        convLayer = self._makeConvLayer(self.inputs, filters[0], kernelSizes[0], kernelStrides[0])
         if radius >= 2:
-            convLayer = tf.layers.conv2d(convLayer, filters=filters[1], 
-                                        kernel_size=kernelSizes[1], strides=kernelStrides[1], 
-                                        padding='valid', activation=tf.nn.leaky_relu)
-            weightList.append(tf.get_default_graph().get_tensor_by_name(convLayer.name.partition('/')[0] + '/kernel:0'))
-            #convLayer = tf.layers.batch_normalization(convLayer)
-            convLayer = tf.layers.conv2d(convLayer, filters=filters[2], 
-                                        kernel_size=kernelSizes[2], strides=kernelStrides[2], 
-                                        padding='valid', activation=tf.nn.leaky_relu)
-            weightList.append(tf.get_default_graph().get_tensor_by_name(convLayer.name.partition('/')[0] + '/kernel:0'))
+            convLayer = self._makeConvLayer(convLayer, filters[1], kernelSizes[1], kernelStrides[1])
+            convLayer = self._makeConvLayer(convLayer, filters[2], kernelSizes[2], kernelStrides[2])
         if radius >= 3:
-            convLayer = tf.layers.conv2d(convLayer, filters=filters[3], 
-                                        kernel_size=kernelSizes[3], strides=kernelStrides[3], 
-                                        padding='valid', activation=tf.nn.leaky_relu)
-            weightList.append(tf.get_default_graph().get_tensor_by_name(convLayer.name.partition('/')[0] + '/kernel:0'))
-            convLayer = tf.layers.conv2d(convLayer, filters=filters[4], 
-                                        kernel_size=kernelSizes[4], strides=kernelStrides[4], 
-                                        padding='valid', activation=tf.nn.leaky_relu)
-            weightList.append(tf.get_default_graph().get_tensor_by_name(convLayer.name.partition('/')[0] + '/kernel:0'))
-            #convLayer = tf.layers.batch_normalization(convLayer)
+            convLayer = self._makeConvLayer(convLayer, filters[3], kernelSizes[3], kernelStrides[3])
+            convLayer = self._makeConvLayer(convLayer, filters[4], kernelSizes[4], kernelStrides[4])
         lastCnnLayer = convLayer
 
-        # WARNING: droupout make the Q-Network instable...
+        # Flatten layer
+        lastCnnLayerFlat = tf.contrib.layers.flatten(lastCnnLayer)
 
         # Fully-connected layers
         lastCnnLayerSize = np.prod(lastCnnLayer.shape.as_list()[1:])
         denseLayerNeurons = geomScaling(lastCnnLayerSize, self.outputSize, 1)
-        lastCnnLayerFlat = tf.contrib.layers.flatten(lastCnnLayer)
-        denseLayer = tf.layers.dense(lastCnnLayerFlat, units=denseLayerNeurons[1], activation=tf.nn.leaky_relu)
-        weightList.append(tf.get_default_graph().get_tensor_by_name(denseLayer.name.partition('/')[0] + '/kernel:0'))
-        #dropoutLayer = tf.layers.dropout(inputs=denseLayer, rate=0.02, training=isTraining)
-        dropoutLayer = denseLayer
-        denseLayer = tf.layers.dense(dropoutLayer, units=denseLayerNeurons[2], activation=tf.nn.leaky_relu)
-        weightList.append(tf.get_default_graph().get_tensor_by_name(denseLayer.name.partition('/')[0] + '/kernel:0'))
-        self.predictedQ = denseLayer
+        denseLayer = self._makeDenseLayer(lastCnnLayerFlat, denseLayerNeurons[1])
+        self.predictedQ = self._makeDenseLayer(denseLayer, denseLayerNeurons[2])
 
         # Training model
         self.realQ = tf.placeholder(shape=[None,len(DeepNeuralQTable.actions)], dtype=tf.float32)
         with tf.name_scope('loss'):
             self.loss = tf.reduce_sum(tf.square(self.realQ - self.predictedQ))
         # GradientDescentOptimizer | AdamOptimizer
-        self.model = tf.train.AdamOptimizer(learning_rate=learningRate).minimize(self.loss)
-        gradMagnitude = tf.reduce_sum([tf.reduce_sum(g**2) for g in tf.gradients(self.loss, weightList)])**0.5
+        optimizer = tf.train.AdamOptimizer(learning_rate=learningRate)
+        #updateOps = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+        #with tf.control_dependencies(updateOps):
+        #    self.model = optimizer.minimize(self.loss)
+        self.model = optimizer.minimize(self.loss)
+        self.model = tf.group(self.model, *self.normLayers)
+        gradMagnitude = tf.reduce_sum([tf.reduce_sum(g**2) for g in tf.gradients(self.loss, self.weightList)])**0.5
         tf.summary.scalar('loss', self.loss)
         #tf.summary.scalar('grad_magnitude', gradMagnitude)
         self.summary = tf.summary.merge_all()
+
+    def _makeConvLayer(self, inputLayer:Any, filterSize:int, kernelSize:int, kernelStride:int, normalize:bool=False) -> Any:
+        with tf.name_scope('normalized-conv'):
+            convLayer = tf.layers.conv2d(inputLayer, filters=filterSize, 
+                                            kernel_size=kernelSize, strides=kernelStride, 
+                                            padding='valid', use_bias=not normalize)
+            #self.weightList.append(tf.get_default_graph().get_tensor_by_name('/'.join(convLayer.name.partition('/')[:-1]) + '/kernel:0'))
+            if normalize:
+                normLayer = tf.layers.batch_normalization(convLayer, scale=False, training=self.isTraining)
+                self.normLayers.append(normLayer)
+            else:
+                normLayer = convLayer
+            activationLayer = tf.nn.leaky_relu(normLayer, alpha=0.1)
+        return activationLayer
+
+    def _makeDenseLayer(self, inputLayer:Any, neurons:int, normalize:bool=False) -> Any:
+        with tf.name_scope('normalized-dense'):
+            denseLayer = tf.layers.dense(inputLayer, units=neurons, use_bias=not normalize)
+            #self.weightList.append(tf.get_default_graph().get_tensor_by_name('/'.join(denseLayer.name.partition('/')[:-1]) + '/kernel:0'))
+            if normalize:
+                normLayer = tf.layers.batch_normalization(denseLayer, scale=False, training=self.isTraining)
+                self.normLayers.append(normLayer)
+            else:
+                normLayer = denseLayer
+            activationLayer = tf.nn.selu(normLayer)
+        return denseLayer
 
     def configure(self, session:tf.Session, modelPath:str) -> None:
         self.session = session
