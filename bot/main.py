@@ -199,8 +199,8 @@ class DeepNeuralQTable:
         # Fully-connected layers
         lastCnnLayerSize = np.prod(lastCnnLayer.shape.as_list()[1:])
         denseLayerNeurons = geomScaling(lastCnnLayerSize, self.outputSize, 1)
-        denseLayer = self._makeDenseLayer(lastCnnLayerFlat, denseLayerNeurons[1])
-        self.predictedQ = self._makeDenseLayer(denseLayer, denseLayerNeurons[2])
+        denseLayer = self._makeDenseLayer(lastCnnLayerFlat, denseLayerNeurons[1], False)
+        self.predictedQ = self._makeDenseLayer(denseLayer, denseLayerNeurons[2], True)
 
         # Training model
         self.realQ = tf.placeholder(shape=[None,len(DeepNeuralQTable.actions)], dtype=tf.float32)
@@ -232,7 +232,7 @@ class DeepNeuralQTable:
             activationLayer = tf.nn.leaky_relu(normLayer, alpha=0.1)
         return activationLayer
 
-    def _makeDenseLayer(self, inputLayer:Any, neurons:int, normalize:bool=False) -> Any:
+    def _makeDenseLayer(self, inputLayer:Any, neurons:int, final:bool=False, normalize:bool=False) -> Any:
         with tf.name_scope('normalized-dense'):
             denseLayer = tf.layers.dense(inputLayer, units=neurons, use_bias=not normalize)
             #self.weightList.append(tf.get_default_graph().get_tensor_by_name('/'.join(denseLayer.name.partition('/')[:-1]) + '/kernel:0'))
@@ -241,14 +241,20 @@ class DeepNeuralQTable:
                 self.normLayers.append(normLayer)
             else:
                 normLayer = denseLayer
-            activationLayer = tf.nn.selu(normLayer)
-        return denseLayer
+            if not final:
+                finalLayer = tf.nn.selu(normLayer)#tf.nn.leaky_relu(normLayer, alpha=0.1)
+            else:
+                finalLayer = normLayer
+        return finalLayer
 
     def configure(self, session:tf.Session, modelPath:str) -> None:
         self.session = session
         self.writer = tf.summary.FileWriter(os.path.join(modelPath, 'train'))
         self.writer.add_graph(self.session.graph)
         self.runId = 0
+
+    def supportBatch(self) -> bool:
+        return True
 
     def get(self, state:State) -> np.ndarray:
         return self.session.run(self.predictedQ, feed_dict={self.inputs: state.value})[0]
@@ -259,9 +265,6 @@ class DeepNeuralQTable:
         _, summary = self.session.run([self.model, self.summary], feed_dict={self.inputs: state.value, self.realQ: actualQLine})
         self.writer.add_summary(summary, self.runId)
         self.runId += 1
-
-    def supportBatch(self) -> bool:
-        return True
 
     def getBatch(self, states:List[State]) -> np.ndarray:
         actualStates = [e.value[0,:,:,:] for e in states]
